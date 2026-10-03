@@ -16,6 +16,8 @@ import paramiko
 MAX_INPUT = 1024
 MAX_COMMANDS = 40
 SESSION_SECONDS = 30
+DEFAULT_MAX_LOG_BYTES = 1_000_000
+DEFAULT_BACKUPS = 3
 
 
 def bounded(value, size=128):
@@ -23,17 +25,39 @@ def bounded(value, size=128):
 
 
 class EventLog:
-    def __init__(self, path):
+    """Append-only JSON Lines log with size-based rotation (events.jsonl -> .1 -> .2 ...)."""
+
+    def __init__(self, path, max_bytes=DEFAULT_MAX_LOG_BYTES, backups=DEFAULT_BACKUPS):
+        if max_bytes < 0 or backups < 0:
+            raise ValueError('max_bytes and backups must not be negative')
         self.path = Path(path)
+        self.max_bytes = max_bytes  # 0 disables rotation
+        self.backups = backups      # 0 means the full log is discarded on rotation
         self.lock = threading.Lock()
+
+    def _rotate(self):
+        """Shift old files up by one; the oldest beyond `backups` is deleted."""
+        if self.backups == 0:
+            self.path.unlink()
+            return
+        oldest = self.path.with_name(f'{self.path.name}.{self.backups}')
+        oldest.unlink(missing_ok=True)
+        for number in range(self.backups - 1, 0, -1):
+            source = self.path.with_name(f'{self.path.name}.{number}')
+            if source.exists():
+                os.replace(source, self.path.with_name(f'{self.path.name}.{number + 1}'))
+        os.replace(self.path, self.path.with_name(f'{self.path.name}.1'))
 
     def write(self, event, session, client_ip, **fields):
         record = dict(timestamp_utc=datetime.now(timezone.utc).isoformat(),
                       event=event, session_id=session, client_ip=client_ip, **fields)
+        line = json.dumps(record, ensure_ascii=True) + '\n'
         with self.lock:
+            if self.max_bytes and self.path.exists() and self.path.stat().st_size + len(line) > self.max_bytes:
+                self._rotate()
             fd = os.open(self.path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
             with os.fdopen(fd, 'a', encoding='utf-8') as stream:
-                stream.write(json.dumps(record, ensure_ascii=True) + '\n')
+                stream.write(line)
 
 
 class FakeShell:
@@ -234,16 +258,22 @@ def main(argv=None):
     parser.add_argument('--port', default=2222, type=int)
     parser.add_argument('--log', type=Path, default=Path('events.jsonl'))
     parser.add_argument('--host-key', type=Path, default=Path('host_key'))
+    parser.add_argument('--max-log-bytes', type=int, default=DEFAULT_MAX_LOG_BYTES,
+                        help='rotate the event log before it exceeds this size; 0 disables rotation (default 1000000)')
+    parser.add_argument('--log-backups', type=int, default=DEFAULT_BACKUPS,
+                        help='rotated files to keep as events.jsonl.1, .2 ...; 0 discards the full log (default 3)')
     args = parser.parse_args(argv)
     try:
         ip = ipaddress.ip_address(args.host)
         if not ip.is_loopback or not 1 <= args.port <= 65535:
             raise ValueError('use a loopback IP and a port from 1 to 65535')
+        if args.max_log_bytes < 0 or args.log_backups < 0:
+            raise ValueError('--max-log-bytes and --log-backups must not be negative')
     except ValueError as exc:
         parser.error(str(exc))
     try:
         key = load_host_key(args.host_key)
-        log = EventLog(args.log)
+        log = EventLog(args.log, args.max_log_bytes, args.log_backups)
         with socket.socket(socket.AF_INET6 if ip.version == 6 else socket.AF_INET, socket.SOCK_STREAM) as listener:
             listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             listener.bind((args.host, args.port))
