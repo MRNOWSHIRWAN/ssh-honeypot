@@ -189,5 +189,42 @@ class LabTests(unittest.TestCase):
             self.assertEqual(commands, ['whoami', 'exit'])
 
 
+    def test_log_rotation_keeps_limited_backups(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'events.jsonl'
+            log = honeypot.EventLog(path, max_bytes=300, backups=2)
+            for number in range(20):
+                log.write('connection', f's{number}', '127.0.0.1')
+            names = sorted(p.name for p in Path(folder).iterdir())
+            self.assertEqual(names, ['events.jsonl', 'events.jsonl.1', 'events.jsonl.2'])
+            for name in names:
+                self.assertLessEqual((Path(folder) / name).stat().st_size, 300)
+            newest = json.loads(path.read_text().splitlines()[-1])
+            self.assertEqual(newest['session_id'], 's19')
+            self.assertEqual(oct((Path(folder) / 'events.jsonl.1').stat().st_mode & 0o777), '0o600')
+
+    def test_log_rotation_zero_backups_and_disabled(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'e.jsonl'
+            log = honeypot.EventLog(path, max_bytes=200, backups=0)
+            for number in range(10):
+                log.write('connection', f's{number}', '127.0.0.1')
+            self.assertEqual([p.name for p in Path(folder).iterdir()], ['e.jsonl'])
+            self.assertLessEqual(path.stat().st_size, 200)
+            plain = Path(folder) / 'plain.jsonl'
+            unlimited = honeypot.EventLog(plain, max_bytes=0)
+            for number in range(30):
+                unlimited.write('connection', f's{number}', '127.0.0.1')
+            self.assertEqual(len(plain.read_text().splitlines()), 30)
+            with self.assertRaises(ValueError):
+                honeypot.EventLog(plain, max_bytes=-1)
+
+    def test_cli_rejects_negative_rotation_options(self):
+        for flag in ('--max-log-bytes', '--log-backups'):
+            with self.assertRaises(SystemExit) as caught, redirect_stderr(io.StringIO()):
+                honeypot.main([flag, '-1'])
+            self.assertEqual(caught.exception.code, 2)
+
+
 if __name__ == '__main__':
     unittest.main()
