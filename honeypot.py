@@ -15,7 +15,8 @@ import paramiko
 
 MAX_INPUT = 1024
 MAX_COMMANDS = 40
-SESSION_SECONDS = 30
+SESSION_SECONDS = 300  # hard cap on one session, including login
+IDLE_SECONDS = 60      # a session with no input for this long is closed
 DEFAULT_MAX_LOG_BYTES = 1_000_000
 DEFAULT_BACKUPS = 3
 
@@ -147,9 +148,9 @@ def command_response(channel, server, shell, command):
     return stop
 
 
-def run_shell(channel, server, deadline):
+def run_shell(channel, server, deadline, idle_seconds=IDLE_SECONDS):
     shell = FakeShell(server.username)
-    channel.settimeout(1)
+    channel.settimeout(0.2)  # short so deadlines are noticed promptly
     if server.exec_command is not None:
         command_response(channel, server, shell, server.exec_command)
         server.exec_command = None
@@ -158,14 +159,20 @@ def run_shell(channel, server, deadline):
     buffer = bytearray()
     commands = 0
     last_cr = False
+    idle_deadline = time.monotonic() + idle_seconds
     while time.monotonic() < deadline and commands < MAX_COMMANDS:
         server.flush()
+        if time.monotonic() >= idle_deadline:
+            channel.sendall(b'\r\nIdle timeout, closing the lab session.\r\n')
+            server.log.write('idle_timeout', server.session, server.client_ip)
+            return
         try:
             chunk = channel.recv(256)
         except socket.timeout:
             continue
         if not chunk:
             return
+        idle_deadline = time.monotonic() + idle_seconds
         for byte in chunk:
             if byte in (10, 13):
                 if byte == 10 and last_cr:
@@ -190,10 +197,16 @@ def run_shell(channel, server, deadline):
                     buffer.clear()
                     server.log.write('input_limit', server.session, server.client_ip)
                     return
+    # Tell the user why the session ends instead of dropping the connection silently.
+    try:
+        reason = 'Command limit reached' if commands >= MAX_COMMANDS else 'Session time limit reached'
+        channel.sendall(f'\r\n{reason}, closing the lab session.\r\n'.encode())
+    except (OSError, EOFError):
+        pass
     server.log.write('session_limit', server.session, server.client_ip)
 
 
-def handle_client(client, address, key, log, timeout=SESSION_SECONDS):
+def handle_client(client, address, key, log, timeout=SESSION_SECONDS, idle_seconds=IDLE_SECONDS):
     session = uuid.uuid4().hex
     ip = address[0]
     transport = None
@@ -222,7 +235,7 @@ def handle_client(client, address, key, log, timeout=SESSION_SECONDS):
                     if channel.closed or time.monotonic() >= deadline:
                         return
                 server.flush()
-                run_shell(channel, server, deadline)
+                run_shell(channel, server, deadline, idle_seconds)
                 if not channel.closed:
                     channel.send_exit_status(0)
             # Allow the client to acknowledge channel close before closing TCP.
