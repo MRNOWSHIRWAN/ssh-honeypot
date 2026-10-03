@@ -4,6 +4,7 @@ from pathlib import Path
 import socket
 import tempfile
 import threading
+import time
 import unittest
 from contextlib import redirect_stderr
 
@@ -224,6 +225,65 @@ class LabTests(unittest.TestCase):
             with self.assertRaises(SystemExit) as caught, redirect_stderr(io.StringIO()):
                 honeypot.main([flag, '-1'])
             self.assertEqual(caught.exception.code, 2)
+
+
+    def _interactive(self, folder, timeout, idle, steps):
+        path = Path(folder) / 'events.jsonl'
+        key = honeypot.load_host_key(Path(folder) / 'host_key')
+        listener = socket.socket()
+        listener.bind(('127.0.0.1', 0)); listener.listen(1); listener.settimeout(5)
+        worker = threading.Thread(target=lambda: honeypot.handle_client(
+            *listener.accept(), key, honeypot.EventLog(path), timeout=timeout, idle_seconds=idle))
+        worker.start()
+        transport = paramiko.Transport(('127.0.0.1', listener.getsockname()[1]))
+        output = b''
+        try:
+            transport.connect(username='demo', password='dummy', hostkey=key)
+            channel = transport.open_session(timeout=3)
+            channel.get_pty(); channel.invoke_shell()
+            channel.settimeout(1.5)
+            for pause, data in steps:
+                time.sleep(pause)
+                try:
+                    channel.sendall(data)
+                except (OSError, EOFError):
+                    break
+            try:
+                while True:
+                    chunk = channel.recv(1024)
+                    if not chunk:
+                        break
+                    output += chunk
+            except (socket.timeout, OSError, EOFError):
+                pass
+        finally:
+            transport.close(); listener.close(); worker.join(7)
+        self.assertFalse(worker.is_alive())
+        return output, [json.loads(line) for line in path.read_text().splitlines()]
+
+    def test_unknown_command_gets_simulated_response_and_session_stays_open(self):
+        with tempfile.TemporaryDirectory() as folder:
+            output, events = self._interactive(folder, 10, 10, [(0.2, b'demo\r'), (0.3, b'whoami\r'), (0.3, b'exit\r')])
+            self.assertIn(b'command not found (simulated)', output)
+            self.assertIn(b'demo\r\nlab$', output)  # the shell kept going after the unknown command
+            self.assertEqual([e['command_name'] for e in events if e['event'] == 'command'], ['demo', 'whoami', 'exit'])
+
+    def test_slow_typist_is_not_cut_off_by_total_time_when_active(self):
+        with tempfile.TemporaryDirectory() as folder:
+            steps = [(0.6, b'demo\r'), (0.6, b'pwd\r'), (0.6, b'exit\r')]
+            output, events = self._interactive(folder, 10, 1.5, steps)
+            self.assertIn(b'/home/demo', output)
+            self.assertFalse([e for e in events if e['event'] in ('idle_timeout', 'session_limit')])
+
+    def test_idle_and_total_limits_explain_why_the_session_ends(self):
+        with tempfile.TemporaryDirectory() as folder:
+            output, events = self._interactive(folder, 10, 0.8, [(0.1, b'pwd\r')])
+            self.assertIn(b'Idle timeout', output)
+            self.assertEqual([e['event'] for e in events].count('idle_timeout'), 1)
+        with tempfile.TemporaryDirectory() as folder:
+            output, events = self._interactive(folder, 1.2, 10, [(0.1, b'pwd\r')])
+            self.assertIn(b'Session time limit reached', output)
+            self.assertEqual([e['event'] for e in events].count('session_limit'), 1)
 
 
 if __name__ == '__main__':
