@@ -1,6 +1,7 @@
 """Build an offline HTML report from local lab events. No network requests."""
 import argparse
 from collections import Counter
+from datetime import datetime, timezone
 import html
 import json
 import os
@@ -30,6 +31,31 @@ def read_events(path):
     return records, skipped
 
 
+def parse_since(text):
+    """Parse an ISO date or datetime (UTC assumed when no offset is given)."""
+    value = datetime.fromisoformat(text)
+    return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+
+
+def filter_records(records, since=None, session=None):
+    """Keep events at or after `since` and/or whose session ID starts with `session`."""
+    kept = []
+    for row in records:
+        if session and not row['session_id'].startswith(session):
+            continue
+        if since is not None:
+            try:
+                stamp = datetime.fromisoformat(row['timestamp_utc'])
+            except ValueError:
+                continue  # an unreadable time cannot be shown to match a time filter
+            if stamp.tzinfo is None:
+                stamp = stamp.replace(tzinfo=timezone.utc)
+            if stamp < since:
+                continue
+        kept.append(row)
+    return kept
+
+
 def render_report(records, skipped=0):
     counts = Counter(row['event'] for row in records)
     ips = Counter(row['client_ip'] for row in records if row['event'] == 'connection')
@@ -54,9 +80,13 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--log', type=Path, default=Path('events.jsonl'))
     parser.add_argument('--output', type=Path, default=Path('report.html'))
+    parser.add_argument('--since', help='only events at or after this ISO date/time, e.g. 2026-10-03 or 2026-10-03T14:30 (UTC)')
+    parser.add_argument('--session', help='only events whose session ID starts with this text')
     args = parser.parse_args(argv)
     try:
+        since = parse_since(args.since) if args.since else None
         records, skipped = read_events(args.log)
+        records = filter_records(records, since, args.session)
         # Do not overwrite the input log with report HTML.
         if args.output.resolve() == args.log.resolve():
             raise ValueError('output must differ from input log')
