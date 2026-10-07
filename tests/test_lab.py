@@ -6,7 +6,8 @@ import tempfile
 import threading
 import time
 import unittest
-from contextlib import redirect_stderr
+from contextlib import redirect_stderr, redirect_stdout
+from datetime import timezone
 
 import paramiko
 import honeypot
@@ -284,6 +285,37 @@ class LabTests(unittest.TestCase):
             output, events = self._interactive(folder, 1.2, 10, [(0.1, b'pwd\r')])
             self.assertIn(b'Session time limit reached', output)
             self.assertEqual([e['event'] for e in events].count('session_limit'), 1)
+
+
+    def test_report_filters_by_time_and_session(self):
+        rows = [
+            {'timestamp_utc': '2026-10-02T23:59:00+00:00', 'session_id': 'aaa111', 'client_ip': '127.0.0.1', 'event': 'connection'},
+            {'timestamp_utc': '2026-10-03T10:00:00+00:00', 'session_id': 'bbb222', 'client_ip': '127.0.0.1', 'event': 'connection'},
+            {'timestamp_utc': '2026-10-03T10:00:05+00:00', 'session_id': 'bbb222', 'client_ip': '127.0.0.1', 'event': 'command', 'command_name': 'pwd'},
+            {'timestamp_utc': 'not a time', 'session_id': 'ccc333', 'client_ip': '127.0.0.1', 'event': 'connection'},
+        ]
+        since = report.parse_since('2026-10-03')
+        self.assertEqual([r['session_id'] for r in report.filter_records(rows, since=since)], ['bbb222', 'bbb222'])
+        self.assertEqual(len(report.filter_records(rows, session='bbb')), 2)
+        self.assertEqual(len(report.filter_records(rows, since=since, session='aaa')), 0)
+        self.assertEqual(len(report.filter_records(rows)), 4)
+        self.assertEqual(report.parse_since('2026-10-03T08:00').tzinfo, timezone.utc)
+
+    def test_report_cli_filters_and_rejects_bad_since(self):
+        with tempfile.TemporaryDirectory() as folder:
+            log = Path(folder) / 'events.jsonl'
+            out = Path(folder) / 'report.html'
+            log.write_text('\n'.join(json.dumps(r) for r in [
+                {'timestamp_utc': '2026-10-01T00:00:00+00:00', 'session_id': 'old1', 'client_ip': '10.0.0.1', 'event': 'connection'},
+                {'timestamp_utc': '2026-10-04T00:00:00+00:00', 'session_id': 'new1', 'client_ip': '10.0.0.2', 'event': 'connection'}]) + '\n')
+            with redirect_stdout(io.StringIO()):
+                self.assertEqual(report.main(['--log', str(log), '--output', str(out), '--since', '2026-10-03']), 0)
+            page = out.read_text()
+            self.assertIn('10.0.0.2', page)
+            self.assertNotIn('10.0.0.1', page)
+            with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as caught:
+                report.main(['--log', str(log), '--output', str(out), '--since', 'yesterday'])
+            self.assertEqual(caught.exception.code, 2)
 
 
 if __name__ == '__main__':
