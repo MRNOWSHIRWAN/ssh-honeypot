@@ -1,5 +1,6 @@
 import io
 import json
+import logging
 from pathlib import Path
 import socket
 import tempfile
@@ -316,6 +317,95 @@ class LabTests(unittest.TestCase):
             with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as caught:
                 report.main(['--log', str(log), '--output', str(out), '--since', 'yesterday'])
             self.assertEqual(caught.exception.code, 2)
+
+
+    def test_graceful_close_half_shuts_then_waits_for_peer(self):
+        left, right = socket.socketpair()
+        received = []
+        peer_done = threading.Event()
+
+        class Transport:
+            def is_active(self):
+                return not peer_done.is_set()
+
+        def peer():
+            while True:
+                chunk = right.recv(1024)
+                received.append(chunk)
+                if not chunk:
+                    break
+            right.close()
+            peer_done.set()
+
+        threading.Thread(target=peer).start()
+        left.sendall(b'final channel bytes')
+        start = time.monotonic()
+        honeypot.close_session_gracefully(left, Transport(), start + 10, grace=1)
+        elapsed = time.monotonic() - start
+        left.close()
+        self.assertEqual(b''.join(received), b'final channel bytes')
+        self.assertEqual(received[-1], b'')  # the peer saw a clean EOF right after the data
+        self.assertLess(elapsed, 1)  # it returned as soon as the peer closed, not at the grace limit
+
+    def test_graceful_close_is_bounded_when_peer_stays_open(self):
+        left, right = socket.socketpair()
+
+        class Transport:
+            def is_active(self):
+                return True
+
+        start = time.monotonic()
+        honeypot.close_session_gracefully(left, Transport(), start + 10, grace=0.3)
+        elapsed = time.monotonic() - start
+        left.close()
+        right.close()
+        self.assertGreaterEqual(elapsed, 0.25)
+        self.assertLess(elapsed, 0.9)  # a silent peer never stalls teardown
+
+    def test_interactive_session_close_leaves_no_socket_error(self):
+        records = []
+
+        class Handler(logging.Handler):
+            def emit(self, record):
+                records.append(record.getMessage())
+
+        logger = logging.getLogger('paramiko')
+        handler = Handler(level=logging.ERROR)
+        logger.addHandler(handler)
+        try:
+            with tempfile.TemporaryDirectory() as folder:
+                path = Path(folder) / 'events.jsonl'
+                key = honeypot.load_host_key(Path(folder) / 'host_key')
+                listener = socket.socket()
+                listener.bind(('127.0.0.1', 0)); listener.listen(1); listener.settimeout(5)
+                worker = threading.Thread(target=lambda: honeypot.handle_client(
+                    *listener.accept(), key, honeypot.EventLog(path), timeout=5))
+                worker.start()
+                transport = paramiko.Transport(('127.0.0.1', listener.getsockname()[1]))
+                try:
+                    transport.connect(username='demo', password='dummy', hostkey=key)
+                    channel = transport.open_session(timeout=3)
+                    channel.get_pty()
+                    channel.invoke_shell()
+                    channel.sendall(b'whoami\r\nexit\r\n')
+                    output = channel.makefile('rb').read()
+                    self.assertIn(b'demo\r\n', output)
+                    # The server's orderly half-close lets the client transport
+                    # end on its own, without the test forcing transport.close().
+                    deadline = time.monotonic() + 2
+                    while transport.is_active() and time.monotonic() < deadline:
+                        time.sleep(0.01)
+                    self.assertFalse(transport.is_active())
+                finally:
+                    transport.close()
+                    listener.close()
+                    worker.join(7)
+                self.assertFalse(worker.is_alive())
+                events = [json.loads(line) for line in path.read_text().splitlines()]
+                self.assertEqual(events[-1]['event'], 'disconnect')
+        finally:
+            logger.removeHandler(handler)
+        self.assertFalse([m for m in records if 'Socket exception' in m])
 
 
 if __name__ == '__main__':
