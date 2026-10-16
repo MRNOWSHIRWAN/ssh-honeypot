@@ -206,6 +206,23 @@ def run_shell(channel, server, deadline, idle_seconds=IDLE_SECONDS):
     server.log.write('session_limit', server.session, server.client_ip)
 
 
+def close_session_gracefully(client, transport, deadline, grace=0.5):
+    """Orderly TCP teardown for a finished lab session.
+
+    Half-close our send side so the peer sees a clean EOF right after the
+    final channel messages, then wait (bounded) for the peer to close first.
+    Closing last with an empty receive queue avoids a TCP reset in either
+    direction. The grace window never extends the session deadline.
+    """
+    try:
+        client.shutdown(socket.SHUT_WR)
+    except OSError:
+        pass
+    grace_deadline = min(deadline, time.monotonic() + grace)
+    while transport.is_active() and time.monotonic() < grace_deadline:
+        time.sleep(0.01)
+
+
 def handle_client(client, address, key, log, timeout=SESSION_SECONDS, idle_seconds=IDLE_SECONDS):
     session = uuid.uuid4().hex
     ip = address[0]
@@ -238,11 +255,7 @@ def handle_client(client, address, key, log, timeout=SESSION_SECONDS, idle_secon
                 run_shell(channel, server, deadline, idle_seconds)
                 if not channel.closed:
                     channel.send_exit_status(0)
-            # Allow the client to acknowledge channel close before closing TCP.
-            # The grace window is bounded and never extends the session deadline.
-            grace_deadline = min(deadline, time.monotonic() + 0.5)
-            while transport.is_active() and time.monotonic() < grace_deadline:
-                time.sleep(0.01)
+            close_session_gracefully(client, transport, deadline)
             return
     except (paramiko.SSHException, OSError, EOFError):
         log.write('session_error', session, ip, reason='transport_or_io_error')
