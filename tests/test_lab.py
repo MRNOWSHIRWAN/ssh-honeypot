@@ -408,5 +408,18 @@ class LabTests(unittest.TestCase):
         self.assertFalse([m for m in records if 'Socket exception' in m])
 
 
+    def test_exit_and_logout_explain_the_close(self):
+        shell = honeypot.FakeShell('demo')
+        for word in ('exit', 'logout'):
+            name, args, response, stop = shell.respond(word)
+            self.assertEqual(response, 'closing the lab session.\r\n')
+            self.assertTrue(stop)
+        with tempfile.TemporaryDirectory() as folder:
+            output, events = self._interactive(folder, 10, 10, [(0.2, b'exit\r')])
+            self.assertIn(b'closing the lab session.', output)
+            self.assertEqual([e['command_name'] for e in events if e['event'] == 'command'], ['exit'])
+            self.assertEqual(events[-1]['event'], 'disconnect')
+
+
 if __name__ == '__main__':
     unittest.main()
