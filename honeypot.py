@@ -79,7 +79,9 @@ class FakeShell:
             'ls': 'notes.txt\r\n',
             'uname': 'Linux (simulated lab)\r\n',
         }
-        return name, args, responses.get(name, 'command not found (simulated)\r\n'), name in ('exit', 'logout')
+        if name in ('exit', 'logout'):
+            return name, args, 'closing the lab session.\r\n', True
+        return name, args, responses.get(name, 'command not found (simulated)\r\n'), False
 
 
 class LabServer(paramiko.ServerInterface):
@@ -143,7 +145,7 @@ def command_response(channel, server, shell, command):
     if name:
         server.log.write('command', server.session, server.client_ip,
                          username=server.username, command_name=name, argument_count=args)
-    if response and not stop:
+    if response:
         channel.sendall(response.encode('utf-8'))
     return stop
 
