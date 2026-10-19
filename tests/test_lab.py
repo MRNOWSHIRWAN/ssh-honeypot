@@ -75,6 +75,14 @@ class LabTests(unittest.TestCase):
             self.assertNotIn('PRIVATE', output)
             self.assertIn('&lt;script&gt;', output)
 
+    def test_report_timeline_shows_session_ids_for_filtering(self):
+        records = [{'timestamp_utc': '2026-10-20T01:00:00+00:00', 'event': 'command',
+                    'session_id': 'abc123session', 'client_ip': '127.0.0.1',
+                    'username': 'demo', 'command_name': 'ls'}]
+        output = report.render_report(records, 0)
+        self.assertIn('<th>Session</th>', output)
+        self.assertIn('abc123session', output)  # the --session filter value is copyable from the report
+
     def test_report_handles_empty_events(self):
         self.assertIn('No events yet', report.render_report([]))
 
