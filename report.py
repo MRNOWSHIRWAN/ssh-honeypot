@@ -65,7 +65,7 @@ def render_report(records, skipped=0):
         rows = ''.join(f'<tr><td>{esc(name)}</td><td>{count}</td></tr>' for name, count in counter.most_common(20))
         return f'<section><h2>{heading}</h2><table><thead><tr><th>Name</th><th>Count</th></tr></thead><tbody>{rows or "<tr><td colspan=2>No events</td></tr>"}</tbody></table></section>'
     timeline = ''.join('<tr>' + ''.join(f'<td>{esc(row[key])}</td>' for key in
-                        ('timestamp_utc', 'event', 'client_ip', 'username', 'command_name')) + '</tr>'
+                        ('timestamp_utc', 'event', 'session_id', 'client_ip', 'username', 'command_name')) + '</tr>'
                        for row in records[-100:][::-1])
     return '''<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>SSH Honeypot Lab | Local report</title><style>
@@ -73,7 +73,7 @@ body{margin:0;background:#101827;color:#e5edf7;font:16px system-ui,sans-serif}ma
 <main><h1>SSH Honeypot Lab</h1><p>Local defensive telemetry. Simulated commands only. IP addresses do not prove malicious intent or attribution.</p><div class="cards">''' + ''.join(
         f'<div class="card"><strong>{value}</strong><span>{label}</span></div>' for label, value in
         [('Connections', counts['connection']), ('Password attempts (redacted)', counts['password_auth']),
-         ('Commands observed', counts['command']), ('Skipped malformed lines', skipped)]) + '</div><div class="grid">' + table(ips, 'Connection sources') + table(commands, 'Command names') + '''</div><section><h2>Latest events (up to 100)</h2><div class="scroll"><table class="timeline"><thead><tr><th>UTC time</th><th>Event</th><th>Client IP</th><th>Username</th><th>Command name</th></tr></thead><tbody>''' + (timeline or '<tr><td colspan=5>No events yet. Run a local test session first.</td></tr>') + '''</tbody></table></div></section><footer>Private local report. Passwords and command arguments are excluded. No external scripts, fonts or tracking.</footer></main></html>'''
+         ('Commands observed', counts['command']), ('Skipped malformed lines', skipped)]) + '</div><div class="grid">' + table(ips, 'Connection sources') + table(commands, 'Command names') + '''</div><section><h2>Latest events (up to 100)</h2><div class="scroll"><table class="timeline"><thead><tr><th>UTC time</th><th>Event</th><th>Session</th><th>Client IP</th><th>Username</th><th>Command name</th></tr></thead><tbody>''' + (timeline or '<tr><td colspan=6>No events yet. Run a local test session first.</td></tr>') + '''</tbody></table></div></section><footer>Private local report. Passwords and command arguments are excluded. No external scripts, fonts or tracking.</footer></main></html>'''
 
 
 def main(argv=None):
