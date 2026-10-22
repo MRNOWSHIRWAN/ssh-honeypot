@@ -309,6 +309,10 @@ class LabTests(unittest.TestCase):
         self.assertEqual(len(report.filter_records(rows, since=since, session='aaa')), 0)
         self.assertEqual(len(report.filter_records(rows)), 4)
         self.assertEqual(report.parse_since('2026-10-03T08:00').tzinfo, timezone.utc)
+        until = report.parse_since('2026-10-03T10:00:00+00:00')
+        self.assertEqual([r['session_id'] for r in report.filter_records(rows, until=until)], ['aaa111', 'bbb222'])
+        window = report.filter_records(rows, since=since, until=until)
+        self.assertEqual([r['session_id'] for r in window], ['bbb222'])
 
     def test_report_cli_filters_and_rejects_bad_since(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -322,8 +326,16 @@ class LabTests(unittest.TestCase):
             page = out.read_text()
             self.assertIn('10.0.0.2', page)
             self.assertNotIn('10.0.0.1', page)
+            with redirect_stdout(io.StringIO()):
+                self.assertEqual(report.main(['--log', str(log), '--output', str(out), '--until', '2026-10-03']), 0)
+            page = out.read_text()
+            self.assertIn('10.0.0.1', page)
+            self.assertNotIn('10.0.0.2', page)
             with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as caught:
                 report.main(['--log', str(log), '--output', str(out), '--since', 'yesterday'])
+            self.assertEqual(caught.exception.code, 2)
+            with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as caught:
+                report.main(['--log', str(log), '--output', str(out), '--until', 'next week'])
             self.assertEqual(caught.exception.code, 2)
 
 
