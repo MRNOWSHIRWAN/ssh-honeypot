@@ -37,20 +37,22 @@ def parse_since(text):
     return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
 
 
-def filter_records(records, since=None, session=None):
-    """Keep events at or after `since` and/or whose session ID starts with `session`."""
+def filter_records(records, since=None, session=None, until=None):
+    """Keep events at or after `since`, at or before `until`, and/or whose session ID starts with `session`."""
     kept = []
     for row in records:
         if session and not row['session_id'].startswith(session):
             continue
-        if since is not None:
+        if since is not None or until is not None:
             try:
                 stamp = datetime.fromisoformat(row['timestamp_utc'])
             except ValueError:
                 continue  # an unreadable time cannot be shown to match a time filter
             if stamp.tzinfo is None:
                 stamp = stamp.replace(tzinfo=timezone.utc)
-            if stamp < since:
+            if since is not None and stamp < since:
+                continue
+            if until is not None and stamp > until:
                 continue
         kept.append(row)
     return kept
@@ -82,11 +84,13 @@ def main(argv=None):
     parser.add_argument('--output', type=Path, default=Path('report.html'))
     parser.add_argument('--since', help='only events at or after this ISO date/time, e.g. 2026-10-03 or 2026-10-03T14:30 (UTC)')
     parser.add_argument('--session', help='only events whose session ID starts with this text')
+    parser.add_argument('--until', help='only events at or before this ISO date/time, e.g. 2026-10-09 or 2026-10-09T18:00 (UTC)')
     args = parser.parse_args(argv)
     try:
         since = parse_since(args.since) if args.since else None
+        until = parse_since(args.until) if args.until else None
         records, skipped = read_events(args.log)
-        records = filter_records(records, since, args.session)
+        records = filter_records(records, since, args.session, until)
         # Do not overwrite the input log with report HTML.
         if args.output.resolve() == args.log.resolve():
             raise ValueError('output must differ from input log')
