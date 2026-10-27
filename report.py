@@ -61,6 +61,8 @@ def filter_records(records, since=None, session=None, until=None):
 def render_report(records, skipped=0):
     counts = Counter(row['event'] for row in records)
     ips = Counter(row['client_ip'] for row in records if row['event'] == 'connection')
+    attempted = [row.get('username', '') for row in records if row['event'] == 'password_auth']
+    usernames = Counter(name for name in attempted if name)
     commands = Counter(row['command_name'] for row in records if row['event'] == 'command')
     esc = lambda value: html.escape(str(value), quote=True)
     def table(counter, heading):
@@ -75,7 +77,7 @@ body{margin:0;background:#101827;color:#e5edf7;font:16px system-ui,sans-serif}ma
 <main><h1>SSH Honeypot Lab</h1><p>Local defensive telemetry. Simulated commands only. IP addresses do not prove malicious intent or attribution.</p><div class="cards">''' + ''.join(
         f'<div class="card"><strong>{value}</strong><span>{label}</span></div>' for label, value in
         [('Connections', counts['connection']), ('Password attempts (redacted)', counts['password_auth']),
-         ('Commands observed', counts['command']), ('Skipped malformed lines', skipped)]) + '</div><div class="grid">' + table(ips, 'Connection sources') + table(commands, 'Command names') + '''</div><section><h2>Latest events (up to 100)</h2><div class="scroll"><table class="timeline"><thead><tr><th>UTC time</th><th>Event</th><th>Session</th><th>Client IP</th><th>Username</th><th>Command name</th></tr></thead><tbody>''' + (timeline or '<tr><td colspan=6>No events yet. Run a local test session first.</td></tr>') + '''</tbody></table></div></section><footer>Private local report. Passwords and command arguments are excluded. No external scripts, fonts or tracking.</footer></main></html>'''
+         ('Commands observed', counts['command']), ('Skipped malformed lines', skipped)]) + '</div><div class="grid">' + table(ips, 'Connection sources') + table(usernames, 'Usernames tried') + table(commands, 'Command names') + '''</div><section><h2>Latest events (up to 100)</h2><div class="scroll"><table class="timeline"><thead><tr><th>UTC time</th><th>Event</th><th>Session</th><th>Client IP</th><th>Username</th><th>Command name</th></tr></thead><tbody>''' + (timeline or '<tr><td colspan=6>No events yet. Run a local test session first.</td></tr>') + '''</tbody></table></div></section><footer>Private local report. Passwords and command arguments are excluded. No external scripts, fonts or tracking.</footer></main></html>'''
 
 
 def main(argv=None):
