@@ -83,6 +83,24 @@ class LabTests(unittest.TestCase):
         self.assertIn('<th>Session</th>', output)
         self.assertIn('abc123session', output)  # the --session filter value is copyable from the report
 
+    def test_report_counts_attempted_usernames(self):
+        base = {'timestamp_utc': '2026-10-28T00:00:00+00:00', 'session_id': 's1',
+                'client_ip': '127.0.0.1', 'command_name': ''}
+        records = [dict(base, event='password_auth', username='admin'),
+                   dict(base, event='password_auth', username='admin'),
+                   dict(base, event='password_auth', username='root'),
+                   dict(base, event='password_auth', username=''),       # nothing to list
+                   dict(base, event='password_auth', username='<i>x</i>'),
+                   dict(base, event='connection', username='demo')]       # only auth attempts count
+        output = report.render_report(records, 0)
+        section = output.split('Usernames tried', 1)[1].split('</section>', 1)[0]
+        self.assertIn('<td>admin</td><td>2</td>', section)
+        self.assertIn('<td>root</td><td>1</td>', section)
+        self.assertNotIn('<td></td>', section)
+        self.assertNotIn('<td>demo</td>', section)      # a connection username is not an attempt
+        self.assertNotIn('<i>x</i>', output)
+        self.assertIn('&lt;i&gt;x&lt;/i&gt;', section)
+
     def test_report_handles_empty_events(self):
         self.assertIn('No events yet', report.render_report([]))
 
