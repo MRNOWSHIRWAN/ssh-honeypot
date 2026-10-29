@@ -73,11 +73,14 @@ class FakeShell:
         if not name:
             return name, args, '', False
         responses = {
-            'help': 'Simulated commands: help, whoami, pwd, ls, uname, exit\r\n',
+            'help': 'Simulated commands: help, whoami, id, pwd, hostname, ls, uname, uptime, exit\r\n',
             'whoami': self.username + '\r\n',
+            'id': f'uid=1000({self.username}) gid=1000({self.username}) groups=1000({self.username})\r\n',
             'pwd': '/home/demo\r\n',
+            'hostname': 'lab-vm\r\n',
             'ls': 'notes.txt\r\n',
             'uname': 'Linux (simulated lab)\r\n',
+            'uptime': 'up 3 days, 1 user, load average: 0.01, 0.02, 0.00 (simulated)\r\n',
         }
         if name in ('exit', 'logout'):
             return name, args, 'closing the lab session.\r\n', True
