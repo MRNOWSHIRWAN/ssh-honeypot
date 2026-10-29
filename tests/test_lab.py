@@ -30,6 +30,16 @@ class LabTests(unittest.TestCase):
         self.assertEqual(shell.respond('pwd')[2], '/home/demo\r\n')
         self.assertTrue(shell.respond('exit')[3])
 
+    def test_extended_shell_commands_are_simulated(self):
+        shell = honeypot.FakeShell('demo')
+        self.assertEqual(shell.respond('id')[2], 'uid=1000(demo) gid=1000(demo) groups=1000(demo)\r\n')
+        self.assertEqual(honeypot.FakeShell('admin').respond('id')[2].count('admin'), 3)  # tracks the session name
+        self.assertEqual(shell.respond('hostname')[2], 'lab-vm\r\n')
+        self.assertIn('(simulated)', shell.respond('uptime')[2])
+        help_text = shell.respond('help')[2]
+        for name in ('whoami', 'id', 'hostname', 'uptime', 'exit'):
+            self.assertIn(name, help_text)
+
     def test_password_redacted_and_forwarding_denied(self):
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / 'events.jsonl'
