@@ -58,6 +58,52 @@ def filter_records(records, since=None, session=None, until=None):
     return kept
 
 
+TERMINAL_EVENTS = ('idle_timeout', 'input_limit', 'session_limit', 'session_error', 'disconnect')
+
+
+def summarize_sessions(records, limit=50):
+    """Collapse events into per-session rows, most recently active first.
+
+    Returns (rows, total): rows is capped at `limit`, total counts all sessions."""
+    sessions = {}
+    for row in records:
+        session = row['session_id']
+        if not session:
+            continue
+        entry = sessions.get(session)
+        if entry is None:
+            entry = sessions[session] = {'session_id': session, 'client_ip': '',
+                                         'first': row['timestamp_utc'], 'last': row['timestamp_utc'],
+                                         'attempts': 0, 'commands': 0, 'usernames': [], 'ended_by': ''}
+        if row['timestamp_utc']:
+            entry['first'] = min(entry['first'] or row['timestamp_utc'], row['timestamp_utc'])
+            entry['last'] = max(entry['last'] or row['timestamp_utc'], row['timestamp_utc'])
+        if row['event'] == 'connection' and not entry['client_ip']:
+            entry['client_ip'] = row['client_ip']
+        if row['event'] == 'password_auth':
+            entry['attempts'] += 1
+            if row.get('username') and row['username'] not in entry['usernames']:
+                entry['usernames'].append(row['username'])
+        if row['event'] == 'command':
+            entry['commands'] += 1
+        reason = ''
+        if row['event'] in TERMINAL_EVENTS:
+            reason = row['event']
+        elif row['event'] == 'command' and row.get('command_name') in ('exit', 'logout'):
+            reason = row['command_name']
+        # A plain disconnect never hides the more specific reason that preceded it.
+        if reason and (reason != 'disconnect' or not entry['ended_by']):
+            entry['ended_by'] = reason
+    rows = sorted(sessions.values(), key=lambda s: (s['last'], s['session_id']), reverse=True)
+    return rows[:limit], len(rows)
+
+
+def format_duration(first, last):
+    try:
+        return f'{int((datetime.fromisoformat(last) - datetime.fromisoformat(first)).total_seconds())}s'
+    except ValueError:
+        return ''
+
 def render_report(records, skipped=0):
     counts = Counter(row['event'] for row in records)
     ips = Counter(row['client_ip'] for row in records if row['event'] == 'connection')
@@ -68,6 +114,14 @@ def render_report(records, skipped=0):
     def table(counter, heading):
         rows = ''.join(f'<tr><td>{esc(name)}</td><td>{count}</td></tr>' for name, count in counter.most_common(20))
         return f'<section><h2>{heading}</h2><table><thead><tr><th>Name</th><th>Count</th></tr></thead><tbody>{rows or "<tr><td colspan=2>No events</td></tr>"}</tbody></table></section>'
+    session_rows, session_total = summarize_sessions(records)
+    sessions_html = ''.join(
+        '<tr>' + ''.join(f'<td>{esc(value)}</td>' for value in (
+            entry['session_id'], entry['client_ip'], entry['first'],
+            format_duration(entry['first'], entry['last']), entry['attempts'], entry['commands'],
+            ', '.join(entry['usernames'][:3]) + (f' +{len(entry["usernames"]) - 3} more' if len(entry['usernames']) > 3 else ''),
+            entry['ended_by'] or '-')) + '</tr>' for entry in session_rows)
+    sessions_heading = f'Sessions ({session_total})' if session_total > len(session_rows) else 'Sessions'
     timeline = ''.join('<tr>' + ''.join(f'<td>{esc(row[key])}</td>' for key in
                         ('timestamp_utc', 'event', 'session_id', 'client_ip', 'username', 'command_name')) + '</tr>'
                        for row in records[-100:][::-1])
@@ -77,7 +131,7 @@ body{margin:0;background:#101827;color:#e5edf7;font:16px system-ui,sans-serif}ma
 <main><h1>SSH Honeypot Lab</h1><p>Local defensive telemetry. Simulated commands only. IP addresses do not prove malicious intent or attribution.</p><div class="cards">''' + ''.join(
         f'<div class="card"><strong>{value}</strong><span>{label}</span></div>' for label, value in
         [('Connections', counts['connection']), ('Password attempts (redacted)', counts['password_auth']),
-         ('Commands observed', counts['command']), ('Skipped malformed lines', skipped)]) + '</div><div class="grid">' + table(ips, 'Connection sources') + table(usernames, 'Usernames tried') + table(commands, 'Command names') + '''</div><section><h2>Latest events (up to 100)</h2><div class="scroll"><table class="timeline"><thead><tr><th>UTC time</th><th>Event</th><th>Session</th><th>Client IP</th><th>Username</th><th>Command name</th></tr></thead><tbody>''' + (timeline or '<tr><td colspan=6>No events yet. Run a local test session first.</td></tr>') + '''</tbody></table></div></section><footer>Private local report. Passwords and command arguments are excluded. No external scripts, fonts or tracking.</footer></main></html>'''
+         ('Commands observed', counts['command']), ('Skipped malformed lines', skipped)]) + '</div><div class="grid">' + table(ips, 'Connection sources') + table(usernames, 'Usernames tried') + table(commands, 'Command names') + '''</div><section><h2>''' + sessions_heading + '''</h2><div class="scroll"><table class="timeline"><thead><tr><th>Session</th><th>Client IP</th><th>First seen (UTC)</th><th>Duration</th><th>Attempts</th><th>Commands</th><th>Usernames tried</th><th>Ended by</th></tr></thead><tbody>''' + (sessions_html or '<tr><td colspan=8>No sessions yet.</td></tr>') + '''</tbody></table></div></section><section><h2>Latest events (up to 100)</h2><div class="scroll"><table class="timeline"><thead><tr><th>UTC time</th><th>Event</th><th>Session</th><th>Client IP</th><th>Username</th><th>Command name</th></tr></thead><tbody>''' + (timeline or '<tr><td colspan=6>No events yet. Run a local test session first.</td></tr>') + '''</tbody></table></div></section><footer>Private local report. Passwords and command arguments are excluded. No external scripts, fonts or tracking.</footer></main></html>'''
 
 
 def main(argv=None):
