@@ -111,6 +111,34 @@ class LabTests(unittest.TestCase):
         self.assertNotIn('<i>x</i>', output)
         self.assertIn('&lt;i&gt;x&lt;/i&gt;', section)
 
+    def test_report_summarizes_sessions(self):
+        records = [
+            {'timestamp_utc': '2026-10-20T01:00:00+00:00', 'event': 'connection', 'session_id': 'sess-a', 'client_ip': '127.0.0.1', 'username': '', 'command_name': ''},
+            {'timestamp_utc': '2026-10-20T01:00:10+00:00', 'event': 'password_auth', 'session_id': 'sess-a', 'client_ip': '127.0.0.1', 'username': '<b>root</b>', 'command_name': ''},
+            {'timestamp_utc': '2026-10-20T01:01:00+00:00', 'event': 'command', 'session_id': 'sess-a', 'client_ip': '127.0.0.1', 'username': '', 'command_name': 'whoami'},
+            {'timestamp_utc': '2026-10-20T01:01:15+00:00', 'event': 'command', 'session_id': 'sess-a', 'client_ip': '127.0.0.1', 'username': '', 'command_name': 'exit'},
+            {'timestamp_utc': '2026-10-20T01:01:16+00:00', 'event': 'disconnect', 'session_id': 'sess-a', 'client_ip': '127.0.0.1', 'username': '', 'command_name': ''},
+            {'timestamp_utc': '2026-10-20T02:00:00+00:00', 'event': 'connection', 'session_id': 'sess-b', 'client_ip': '127.0.0.2', 'username': '', 'command_name': ''},
+            {'timestamp_utc': '2026-10-20T02:05:00+00:00', 'event': 'idle_timeout', 'session_id': 'sess-b', 'client_ip': '127.0.0.2', 'username': '', 'command_name': ''},
+        ]
+        output = report.render_report(records, 0)
+        section = output.split('<h2>Sessions</h2>', 1)[1].split('Latest events', 1)[0]
+        self.assertLess(section.index('sess-b'), section.index('sess-a'))  # most recently active first
+        self.assertIn('<td>sess-a</td><td>127.0.0.1</td><td>2026-10-20T01:00:00+00:00</td><td>76s</td><td>1</td><td>2</td>', section)
+        self.assertIn('&lt;b&gt;root&lt;/b&gt;', section)
+        self.assertNotIn('<b>root</b>', section)
+        self.assertIn('<td>exit</td>', section)          # the exit command explains the close, not the later disconnect
+        self.assertIn('<td>idle_timeout</td>', section)
+
+    def test_report_sessions_handles_open_session(self):
+        records = [{'timestamp_utc': '2026-10-20T03:00:00+00:00', 'event': 'connection',
+                    'session_id': 'sess-c', 'client_ip': '127.0.0.3', 'username': '', 'command_name': ''}]
+        output = report.render_report(records, 0)
+        section = output.split('<h2>Sessions</h2>', 1)[1].split('Latest events', 1)[0]
+        self.assertIn('<td>sess-c</td><td>127.0.0.3</td>', section)
+        self.assertIn('<td>0s</td>', section)
+        self.assertIn('<td>-</td>', section)  # no close reason yet
+
     def test_report_handles_empty_events(self):
         self.assertIn('No events yet', report.render_report([]))
 
