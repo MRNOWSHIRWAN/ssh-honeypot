@@ -11,23 +11,34 @@ MAX_LOG_BYTES = 5_000_000
 MAX_ROWS = 20_000
 
 
+def rotated_paths(path):
+    """Rotated siblings of the log (events.jsonl.3, .2, .1), oldest first."""
+    path = Path(path)
+    backups = [candidate for candidate in path.parent.glob(path.name + '.*')
+               if candidate.suffix[1:].isdigit()]
+    return sorted(backups, key=lambda candidate: int(candidate.suffix[1:]), reverse=True)
+
+
 def read_events(path):
-    if path.stat().st_size > MAX_LOG_BYTES:
-        raise ValueError('log exceeds 5 MB; rotate it before reporting')
+    """Read the log and any rotated siblings, oldest file first. Combined limits apply."""
+    sources = rotated_paths(path) + [Path(path)]
+    if sum(source.stat().st_size for source in sources if source.exists()) > MAX_LOG_BYTES:
+        raise ValueError('logs exceed 5 MB in total; use --since/--until for a smaller window')
     records, skipped = [], 0
-    with path.open(encoding='utf-8') as stream:
-        for index, line in enumerate(stream):
-            if index >= MAX_ROWS:
-                raise ValueError('log exceeds 20,000 lines; rotate it before reporting')
-            try:
-                record = json.loads(line)
-                if not isinstance(record, dict) or not isinstance(record.get('event'), str):
-                    raise ValueError('invalid event')
-                # Only allow known fields; never display password or command arguments.
-                fields = ('timestamp_utc', 'session_id', 'client_ip', 'event', 'username', 'command_name')
-                records.append({key: str(record.get(key, ''))[:256] for key in fields})
-            except (ValueError, TypeError):
-                skipped += 1
+    for source in sources:
+        with source.open(encoding='utf-8') as stream:
+            for line in stream:
+                if len(records) + skipped >= MAX_ROWS:
+                    raise ValueError('logs exceed 20,000 lines in total; use --since/--until for a smaller window')
+                try:
+                    record = json.loads(line)
+                    if not isinstance(record, dict) or not isinstance(record.get('event'), str):
+                        raise ValueError('invalid event')
+                    # Only allow known fields; never display password or command arguments.
+                    fields = ('timestamp_utc', 'session_id', 'client_ip', 'event', 'username', 'command_name')
+                    records.append({key: str(record.get(key, ''))[:256] for key in fields})
+                except (ValueError, TypeError):
+                    skipped += 1
     return records, skipped
 
 
@@ -155,7 +166,9 @@ def main(argv=None):
             output.write(render_report(records, skipped))
     except (OSError, ValueError) as exc:
         parser.exit(2, f'Cannot build report: {exc}\n')
-    print(f'Report saved to {args.output}; {len(records)} events, {skipped} malformed lines skipped. Keep it private.')
+    rotated = len(rotated_paths(args.log))
+    print(f'Report saved to {args.output}; {len(records)} events, {skipped} malformed lines skipped'
+          + (f' (includes {rotated} rotated log file(s))' if rotated else '') + '. Keep it private.')
     return 0
 
 
