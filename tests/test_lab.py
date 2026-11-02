@@ -187,6 +187,42 @@ class LabTests(unittest.TestCase):
                 self.assertEqual(path.stat().st_mode & 0o777, 0o600)
                 self.assertEqual((Path(folder)/'host_key').stat().st_mode & 0o777, 0o600)
 
+    def test_report_includes_rotated_logs_oldest_first(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'events.jsonl'
+            (Path(folder) / 'events.jsonl.2').write_text(json.dumps(
+                {'timestamp_utc': '2026-10-01T00:00:00+00:00', 'event': 'connection', 'session_id': 'oldest1', 'client_ip': '127.0.0.1'}) + '\n')
+            (Path(folder) / 'events.jsonl.1').write_text('not-json\n' + json.dumps(
+                {'timestamp_utc': '2026-10-02T00:00:00+00:00', 'event': 'connection', 'session_id': 'middle2', 'client_ip': '127.0.0.1'}) + '\n')
+            path.write_text(json.dumps(
+                {'timestamp_utc': '2026-10-03T00:00:00+00:00', 'event': 'connection', 'session_id': 'newest3', 'client_ip': '127.0.0.1'}) + '\n')
+            (Path(folder) / 'events.jsonl.txt').write_text('ignored\n')  # not a rotated suffix
+            records, skipped = report.read_events(path)
+            self.assertEqual([row['session_id'] for row in records], ['oldest1', 'middle2', 'newest3'])
+            self.assertEqual(skipped, 1)
+
+    def test_report_combined_size_limit_counts_rotated_files(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'events.jsonl'
+            path.write_text('x' * 100)
+            (Path(folder) / 'events.jsonl.1').write_text('x' * 100)  # each file fits; together they do not
+            with __import__('unittest.mock', fromlist=['patch']).patch.object(report, 'MAX_LOG_BYTES', 150):
+                with self.assertRaises(ValueError):
+                    report.read_events(path)
+
+    def test_report_cli_notes_included_rotated_logs(self):
+        with tempfile.TemporaryDirectory() as folder:
+            log = Path(folder) / 'events.jsonl'
+            out = Path(folder) / 'report.html'
+            (Path(folder) / 'events.jsonl.1').write_text(json.dumps(
+                {'timestamp_utc': '2026-10-02T00:00:00+00:00', 'event': 'connection', 'session_id': 'older-session', 'client_ip': '127.0.0.1'}) + '\n')
+            log.write_text(json.dumps(
+                {'timestamp_utc': '2026-10-03T00:00:00+00:00', 'event': 'connection', 'session_id': 'newer-session', 'client_ip': '127.0.0.1'}) + '\n')
+            with redirect_stdout(io.StringIO()) as text:
+                self.assertEqual(report.main(['--log', str(log), '--output', str(out)]), 0)
+            self.assertIn('1 rotated log file', text.getvalue())
+            self.assertIn('older-session', out.read_text())
+
     def test_report_size_and_output_path_limits(self):
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / 'events.jsonl'
