@@ -283,6 +283,31 @@ def load_host_key(path):
     return key
 
 
+
+def serve(listener, key, log, timeout=SESSION_SECONDS, idle_seconds=IDLE_SECONDS):
+    """Accept lab connections until the listener closes; each session runs in its own thread.
+
+    A honeypot that serves one connection at a time would make every other
+    caller wait out the active session, so sessions run concurrently. The
+    event log is already thread-safe. Returns the started session threads so
+    callers (tests) can wait for them.
+    """
+    threads = []
+    while True:
+        try:
+            client, address = listener.accept()
+        except socket.timeout:
+            continue
+        except OSError:
+            break  # listener closed
+        thread = threading.Thread(target=handle_client,
+                                  args=(client, address, key, log, timeout, idle_seconds),
+                                  daemon=True)
+        thread.start()
+        threads.append(thread)
+    return threads
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--host', default='127.0.0.1', help='loopback IP literal only')
@@ -311,12 +336,7 @@ def main(argv=None):
             listener.listen(5)
             listener.settimeout(1)
             print(f'Local lab listening on {args.host}:{args.port}. Ctrl+C stops. Passwords/arguments are not stored.', flush=True)
-            while True:
-                try:
-                    client, address = listener.accept()
-                except socket.timeout:
-                    continue
-                handle_client(client, address, key, log)
+            serve(listener, key, log)
     except KeyboardInterrupt:
         return 0
     except (OSError, paramiko.SSHException) as exc:
