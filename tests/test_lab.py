@@ -533,5 +533,62 @@ class LabTests(unittest.TestCase):
             self.assertEqual(events[-1]['event'], 'disconnect')
 
 
+
+    def test_concurrent_sessions_are_served_in_parallel(self):
+        """A second caller is served while the first session is still open."""
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'events.jsonl'
+            key = honeypot.load_host_key(Path(folder) / 'host_key')
+            listener = socket.socket()
+            listener.bind(('127.0.0.1', 0)); listener.listen(5); listener.settimeout(1)
+            port = listener.getsockname()[1]
+            server = threading.Thread(target=honeypot.serve,
+                                      args=(listener, key, honeypot.EventLog(path)), daemon=True)
+            server.start()
+            first = paramiko.Transport(('127.0.0.1', port))
+            try:
+                first.connect(username='alice', password='dummy', hostkey=key)
+                shell = first.open_session(timeout=5)
+                shell.get_pty(); shell.invoke_shell(); shell.settimeout(5)
+                shell.sendall(b'whoami\r\n')
+                seen = b''
+                deadline = time.monotonic() + 5
+                while b'alice\r\n' not in seen and time.monotonic() < deadline:
+                    try:
+                        seen += shell.recv(256)
+                    except socket.timeout:
+                        break
+                self.assertIn(b'alice\r\n', seen)  # first session is logged in and stays open
+                # With one-at-a-time handling this second handshake would stall until the first exits.
+                second = paramiko.Transport(('127.0.0.1', port))
+                try:
+                    second.connect(username='bob', password='dummy', hostkey=key)
+                    channel = second.open_session(timeout=5)
+                    channel.exec_command('hostname')
+                    self.assertIn(b'lab-vm', channel.makefile('rb').read())
+                    try:
+                        channel.close()
+                    except EOFError:
+                        pass
+                finally:
+                    second.close()
+                shell.sendall(b'exit\r\n')
+                try:
+                    shell.close()
+                except EOFError:
+                    pass
+            finally:
+                first.close()
+                listener.close()
+                server.join(5)
+            self.assertFalse(server.is_alive())
+            time.sleep(0.2)  # let session threads flush their final events
+            events = [json.loads(line) for line in path.read_text().splitlines()]
+            self.assertEqual(len({row['session_id'] for row in events if row['event'] == 'connection'}), 2)
+            names = sorted(row['username'] for row in events if row['event'] == 'password_auth')
+            self.assertEqual(names, ['alice', 'bob'])
+            self.assertTrue(any(row['event'] == 'command' and row['command_name'] == 'hostname' for row in events))
+
+
 if __name__ == '__main__':
     unittest.main()
