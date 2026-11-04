@@ -590,5 +590,73 @@ class LabTests(unittest.TestCase):
             self.assertTrue(any(row['event'] == 'command' and row['command_name'] == 'hostname' for row in events))
 
 
+
+    def test_over_cap_caller_is_refused_and_logged(self):
+        """With the session cap reached, a new caller is turned away, not queued."""
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'events.jsonl'
+            key = honeypot.load_host_key(Path(folder) / 'host_key')
+            listener = socket.socket()
+            listener.bind(('127.0.0.1', 0)); listener.listen(5); listener.settimeout(1)
+            port = listener.getsockname()[1]
+            server = threading.Thread(target=honeypot.serve,
+                                      args=(listener, key, honeypot.EventLog(path)),
+                                      kwargs={'max_sessions': 1}, daemon=True)
+            server.start()
+            first = paramiko.Transport(('127.0.0.1', port))
+            try:
+                first.connect(username='alice', password='dummy', hostkey=key)
+                shell = first.open_session(timeout=5)
+                shell.get_pty(); shell.invoke_shell(); shell.settimeout(5)
+                shell.sendall(b'whoami\r\n')
+                seen = b''
+                deadline = time.monotonic() + 5
+                while b'alice\r\n' not in seen and time.monotonic() < deadline:
+                    try:
+                        seen += shell.recv(256)
+                    except socket.timeout:
+                        break
+                self.assertIn(b'alice\r\n', seen)  # cap of 1 is now fully used
+                refused = paramiko.Transport(('127.0.0.1', port))
+                try:
+                    with self.assertRaises(paramiko.SSHException):
+                        refused.connect(username='bob', password='dummy', hostkey=key)
+                finally:
+                    refused.close()
+                shell.sendall(b'exit\r\n')
+                try:
+                    shell.close()
+                except EOFError:
+                    pass
+            finally:
+                first.close()
+                listener.close()
+                server.join(5)
+            self.assertFalse(server.is_alive())
+            time.sleep(0.2)
+            events = [json.loads(line) for line in path.read_text().splitlines()]
+            self.assertTrue(any(row['event'] == 'session_refused' and row.get('reason') == 'max_sessions_reached'
+                                for row in events))
+            self.assertEqual([row['username'] for row in events if row['event'] == 'password_auth'], ['alice'])
+
+    def test_serve_rejects_invalid_max_sessions(self):
+        with tempfile.TemporaryDirectory() as folder:
+            listener = socket.socket()
+            try:
+                with self.assertRaises(ValueError):
+                    honeypot.serve(listener, None, honeypot.EventLog(Path(folder) / 'e.jsonl'),
+                                 max_sessions=0)
+            finally:
+                listener.close()
+
+    def test_cli_rejects_zero_max_sessions(self):
+        with tempfile.TemporaryDirectory() as folder:
+            stderr = io.StringIO()
+            with self.assertRaises(SystemExit), redirect_stderr(stderr):
+                honeypot.main(['--log', str(Path(folder) / 'e.jsonl'),
+                               '--host-key', str(Path(folder) / 'k'), '--max-sessions', '0'])
+            self.assertIn('at least 1', stderr.getvalue())
+
+
 if __name__ == '__main__':
     unittest.main()
