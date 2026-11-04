@@ -19,6 +19,7 @@ SESSION_SECONDS = 300  # hard cap on one session, including login
 IDLE_SECONDS = 60      # a session with no input for this long is closed
 DEFAULT_MAX_LOG_BYTES = 1_000_000
 DEFAULT_BACKUPS = 3
+DEFAULT_MAX_SESSIONS = 8
 
 
 def bounded(value, size=128):
@@ -284,14 +285,29 @@ def load_host_key(path):
 
 
 
-def serve(listener, key, log, timeout=SESSION_SECONDS, idle_seconds=IDLE_SECONDS):
+def run_session(slots, client, address, key, log, timeout, idle_seconds):
+    """Run one lab session and always return its slot, even on a crash."""
+    try:
+        handle_client(client, address, key, log, timeout, idle_seconds)
+    finally:
+        slots.release()
+
+
+def serve(listener, key, log, timeout=SESSION_SECONDS, idle_seconds=IDLE_SECONDS,
+          max_sessions=DEFAULT_MAX_SESSIONS):
     """Accept lab connections until the listener closes; each session runs in its own thread.
 
     A honeypot that serves one connection at a time would make every other
-    caller wait out the active session, so sessions run concurrently. The
-    event log is already thread-safe. Returns the started session threads so
+    caller wait out the active session, so sessions run concurrently - but
+    unbounded threads would let a flood of connections exhaust the host, so
+    at most `max_sessions` run at once. Callers over the cap are logged and
+    turned away immediately instead of piling up in the backlog. The event
+    log is already thread-safe. Returns the started session threads so
     callers (tests) can wait for them.
     """
+    if max_sessions < 1:
+        raise ValueError('max_sessions must be at least 1')
+    slots = threading.Semaphore(max_sessions)
     threads = []
     while True:
         try:
@@ -300,8 +316,12 @@ def serve(listener, key, log, timeout=SESSION_SECONDS, idle_seconds=IDLE_SECONDS
             continue
         except OSError:
             break  # listener closed
-        thread = threading.Thread(target=handle_client,
-                                  args=(client, address, key, log, timeout, idle_seconds),
+        if not slots.acquire(blocking=False):
+            log.write('session_refused', uuid.uuid4().hex, address[0], reason='max_sessions_reached')
+            client.close()
+            continue
+        thread = threading.Thread(target=run_session,
+                                  args=(slots, client, address, key, log, timeout, idle_seconds),
                                   daemon=True)
         thread.start()
         threads.append(thread)
@@ -318,6 +338,8 @@ def main(argv=None):
                         help='rotate the event log before it exceeds this size; 0 disables rotation (default 1000000)')
     parser.add_argument('--log-backups', type=int, default=DEFAULT_BACKUPS,
                         help='rotated files to keep as events.jsonl.1, .2 ...; 0 discards the full log (default 3)')
+    parser.add_argument('--max-sessions', type=int, default=DEFAULT_MAX_SESSIONS,
+                        help='maximum simultaneous lab sessions; extra callers are turned away (default 8)')
     args = parser.parse_args(argv)
     try:
         ip = ipaddress.ip_address(args.host)
@@ -325,6 +347,8 @@ def main(argv=None):
             raise ValueError('use a loopback IP and a port from 1 to 65535')
         if args.max_log_bytes < 0 or args.log_backups < 0:
             raise ValueError('--max-log-bytes and --log-backups must not be negative')
+        if args.max_sessions < 1:
+            raise ValueError('--max-sessions must be at least 1')
     except ValueError as exc:
         parser.error(str(exc))
     try:
@@ -336,7 +360,7 @@ def main(argv=None):
             listener.listen(5)
             listener.settimeout(1)
             print(f'Local lab listening on {args.host}:{args.port}. Ctrl+C stops. Passwords/arguments are not stored.', flush=True)
-            serve(listener, key, log)
+            serve(listener, key, log, max_sessions=args.max_sessions)
     except KeyboardInterrupt:
         return 0
     except (OSError, paramiko.SSHException) as exc:
