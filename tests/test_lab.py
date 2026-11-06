@@ -658,5 +658,30 @@ class LabTests(unittest.TestCase):
             self.assertIn('at least 1', stderr.getvalue())
 
 
+
+    def test_report_cli_rejects_since_after_until(self):
+        with tempfile.TemporaryDirectory() as folder:
+            log = Path(folder) / 'events.jsonl'
+            log.write_text('')
+            stderr = io.StringIO()
+            with redirect_stderr(stderr), self.assertRaises(SystemExit) as caught:
+                report.main(['--log', str(log), '--output', str(Path(folder) / 'r.html'),
+                             '--since', '2026-10-05', '--until', '2026-10-03'])
+            self.assertEqual(caught.exception.code, 2)
+            self.assertIn('must not be after', stderr.getvalue())
+
+    def test_report_notes_active_filters_and_escapes_them(self):
+        rows = [{'timestamp_utc': '2026-10-03T10:00:00+00:00', 'session_id': 'abc123',
+                 'client_ip': '127.0.0.1', 'event': 'connection', 'username': '', 'command_name': ''}]
+        plain = report.render_report(rows)
+        self.assertNotIn('Showing only events', plain)
+        since = report.parse_since('2026-10-03')
+        until = report.parse_since('2026-10-04')
+        page = report.render_report(rows, since=since, until=until, session='ab"<')
+        self.assertIn('Showing only events from 2026-10-03T00:00:00+00:00; until 2026-10-04T00:00:00+00:00', page)
+        self.assertIn('session starts with &quot;ab&quot;&lt;', page)
+        self.assertNotIn('ab"<', page)  # the raw session text must not reach the HTML
+
+
 if __name__ == '__main__':
     unittest.main()

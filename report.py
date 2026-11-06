@@ -115,7 +115,7 @@ def format_duration(first, last):
     except ValueError:
         return ''
 
-def render_report(records, skipped=0):
+def render_report(records, skipped=0, since=None, until=None, session=None):
     counts = Counter(row['event'] for row in records)
     ips = Counter(row['client_ip'] for row in records if row['event'] == 'connection')
     attempted = [row.get('username', '') for row in records if row['event'] == 'password_auth']
@@ -136,10 +136,18 @@ def render_report(records, skipped=0):
     timeline = ''.join('<tr>' + ''.join(f'<td>{esc(row[key])}</td>' for key in
                         ('timestamp_utc', 'event', 'session_id', 'client_ip', 'username', 'command_name')) + '</tr>'
                        for row in records[-100:][::-1])
+    filters = []
+    if since is not None:
+        filters.append(f'from {esc(since.isoformat())}')
+    if until is not None:
+        filters.append(f'until {esc(until.isoformat())}')
+    if session:
+        filters.append(f'session starts with &quot;{esc(session)}&quot;')
+    filters_html = f'<p>Showing only events {"; ".join(filters)}.</p>' if filters else ''
     return '''<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>SSH Honeypot Lab | Local report</title><style>
 body{margin:0;background:#101827;color:#e5edf7;font:16px system-ui,sans-serif}main{max-width:1100px;margin:auto;padding:32px 20px}h1{font-size:32px;margin-bottom:8px}p{color:#b7c5da;line-height:1.6}.cards,.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:16px}.card,section{background:#19263b;border:1px solid #304562;border-radius:12px;padding:20px}.card strong{display:block;font-size:28px;color:#7dd3fc}.card span{color:#c0cee0}h2{font-size:20px}table{border-collapse:collapse;width:100%;font-size:14px}td,th{text-align:left;padding:10px 6px;border-bottom:1px solid #304562;overflow-wrap:anywhere}th{color:#7dd3fc}.grid{margin:20px 0}.scroll{overflow-x:auto}footer{color:#b7c5da;font-size:14px;margin-top:24px}.timeline{min-width:700px}</style>
-<main><h1>SSH Honeypot Lab</h1><p>Local defensive telemetry. Simulated commands only. IP addresses do not prove malicious intent or attribution.</p><div class="cards">''' + ''.join(
+<main><h1>SSH Honeypot Lab</h1><p>Local defensive telemetry. Simulated commands only. IP addresses do not prove malicious intent or attribution.</p>''' + filters_html + '''<div class="cards">''' + ''.join(
         f'<div class="card"><strong>{value}</strong><span>{label}</span></div>' for label, value in
         [('Connections', counts['connection']), ('Password attempts (redacted)', counts['password_auth']),
          ('Commands observed', counts['command']), ('Skipped malformed lines', skipped)]) + '</div><div class="grid">' + table(ips, 'Connection sources') + table(usernames, 'Usernames tried') + table(commands, 'Command names') + '''</div><section><h2>''' + sessions_heading + '''</h2><div class="scroll"><table class="timeline"><thead><tr><th>Session</th><th>Client IP</th><th>First seen (UTC)</th><th>Duration</th><th>Attempts</th><th>Commands</th><th>Usernames tried</th><th>Ended by</th></tr></thead><tbody>''' + (sessions_html or '<tr><td colspan=8>No sessions yet.</td></tr>') + '''</tbody></table></div></section><section><h2>Latest events (up to 100)</h2><div class="scroll"><table class="timeline"><thead><tr><th>UTC time</th><th>Event</th><th>Session</th><th>Client IP</th><th>Username</th><th>Command name</th></tr></thead><tbody>''' + (timeline or '<tr><td colspan=6>No events yet. Run a local test session first.</td></tr>') + '''</tbody></table></div></section><footer>Private local report. Passwords and command arguments are excluded. No external scripts, fonts or tracking.</footer></main></html>'''
@@ -156,6 +164,8 @@ def main(argv=None):
     try:
         since = parse_since(args.since) if args.since else None
         until = parse_since(args.until) if args.until else None
+        if since is not None and until is not None and since > until:
+            raise ValueError('--since must not be after --until')
         records, skipped = read_events(args.log)
         records = filter_records(records, since, args.session, until)
         # Do not overwrite the input log with report HTML.
@@ -163,7 +173,7 @@ def main(argv=None):
             raise ValueError('output must differ from input log')
         fd = os.open(args.output, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         with os.fdopen(fd, 'w', encoding='utf-8') as output:
-            output.write(render_report(records, skipped))
+            output.write(render_report(records, skipped, since, until, args.session))
     except (OSError, ValueError) as exc:
         parser.exit(2, f'Cannot build report: {exc}\n')
     rotated = len(rotated_paths(args.log))
