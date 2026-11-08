@@ -139,6 +139,15 @@ class LabTests(unittest.TestCase):
         self.assertIn('<td>0s</td>', section)
         self.assertIn('<td>-</td>', section)  # no close reason yet
 
+    def test_report_surfaces_refused_sessions(self):
+        records = [{'timestamp_utc': '2026-10-20T03:00:00+00:00', 'event': 'session_refused',
+                    'session_id': 'sess-r', 'client_ip': '127.0.0.9', 'username': '', 'command_name': ''}]
+        output = report.render_report(records, 0)
+        self.assertIn('<strong>1</strong><span>Sessions refused (over cap)</span>', output)
+        section = output.split('<h2>Sessions</h2>', 1)[1].split('Latest events', 1)[0]
+        self.assertIn('<td>sess-r</td>', section)
+        self.assertIn('<td>refused (max sessions)</td>', section)
+
     def test_report_handles_empty_events(self):
         self.assertIn('No events yet', report.render_report([]))
 

@@ -98,7 +98,9 @@ def summarize_sessions(records, limit=50):
         if row['event'] == 'command':
             entry['commands'] += 1
         reason = ''
-        if row['event'] in TERMINAL_EVENTS:
+        if row['event'] == 'session_refused':
+            reason = 'refused (max sessions)'
+        elif row['event'] in TERMINAL_EVENTS:
             reason = row['event']
         elif row['event'] == 'command' and row.get('command_name') in ('exit', 'logout'):
             reason = row['command_name']
@@ -150,7 +152,8 @@ body{margin:0;background:#101827;color:#e5edf7;font:16px system-ui,sans-serif}ma
 <main><h1>SSH Honeypot Lab</h1><p>Local defensive telemetry. Simulated commands only. IP addresses do not prove malicious intent or attribution.</p>''' + filters_html + '''<div class="cards">''' + ''.join(
         f'<div class="card"><strong>{value}</strong><span>{label}</span></div>' for label, value in
         [('Connections', counts['connection']), ('Password attempts (redacted)', counts['password_auth']),
-         ('Commands observed', counts['command']), ('Skipped malformed lines', skipped)]) + '</div><div class="grid">' + table(ips, 'Connection sources') + table(usernames, 'Usernames tried') + table(commands, 'Command names') + '''</div><section><h2>''' + sessions_heading + '''</h2><div class="scroll"><table class="timeline"><thead><tr><th>Session</th><th>Client IP</th><th>First seen (UTC)</th><th>Duration</th><th>Attempts</th><th>Commands</th><th>Usernames tried</th><th>Ended by</th></tr></thead><tbody>''' + (sessions_html or '<tr><td colspan=8>No sessions yet.</td></tr>') + '''</tbody></table></div></section><section><h2>Latest events (up to 100)</h2><div class="scroll"><table class="timeline"><thead><tr><th>UTC time</th><th>Event</th><th>Session</th><th>Client IP</th><th>Username</th><th>Command name</th></tr></thead><tbody>''' + (timeline or '<tr><td colspan=6>No events yet. Run a local test session first.</td></tr>') + '''</tbody></table></div></section><footer>Private local report. Passwords and command arguments are excluded. No external scripts, fonts or tracking.</footer></main></html>'''
+         ('Commands observed', counts['command']), ('Sessions refused (over cap)', counts['session_refused']),
+         ('Skipped malformed lines', skipped)]) + '</div><div class="grid">' + table(ips, 'Connection sources') + table(usernames, 'Usernames tried') + table(commands, 'Command names') + '''</div><section><h2>''' + sessions_heading + '''</h2><div class="scroll"><table class="timeline"><thead><tr><th>Session</th><th>Client IP</th><th>First seen (UTC)</th><th>Duration</th><th>Attempts</th><th>Commands</th><th>Usernames tried</th><th>Ended by</th></tr></thead><tbody>''' + (sessions_html or '<tr><td colspan=8>No sessions yet.</td></tr>') + '''</tbody></table></div></section><section><h2>Latest events (up to 100)</h2><div class="scroll"><table class="timeline"><thead><tr><th>UTC time</th><th>Event</th><th>Session</th><th>Client IP</th><th>Username</th><th>Command name</th></tr></thead><tbody>''' + (timeline or '<tr><td colspan=6>No events yet. Run a local test session first.</td></tr>') + '''</tbody></table></div></section><footer>Private local report. Passwords and command arguments are excluded. No external scripts, fonts or tracking.</footer></main></html>'''
 
 
 def main(argv=None):
