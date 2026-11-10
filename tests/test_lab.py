@@ -40,6 +40,15 @@ class LabTests(unittest.TestCase):
         for name in ('whoami', 'id', 'hostname', 'uptime', 'exit'):
             self.assertIn(name, help_text)
 
+    def test_fake_shell_cat_matches_the_ls_listing(self):
+        shell = honeypot.FakeShell('demo')
+        content = shell.respond('cat notes.txt')[2]
+        self.assertIn('simulation', content)
+        self.assertNotIn('command not found', content)  # ls lists notes.txt, so cat must find it
+        self.assertIn('No such file or directory (simulated)', shell.respond('cat secret.txt')[2])
+        self.assertIn('missing file operand (simulated)', shell.respond('cat')[2])
+        self.assertIn('cat', shell.respond('help')[2])
+
     def test_password_redacted_and_forwarding_denied(self):
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / 'events.jsonl'

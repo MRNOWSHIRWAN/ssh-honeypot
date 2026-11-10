@@ -74,7 +74,7 @@ class FakeShell:
         if not name:
             return name, args, '', False
         responses = {
-            'help': 'Simulated commands: help, whoami, id, pwd, hostname, ls, uname, uptime, exit\r\n',
+            'help': 'Simulated commands: help, whoami, id, pwd, hostname, ls, cat, uname, uptime, exit\r\n',
             'whoami': self.username + '\r\n',
             'id': f'uid=1000({self.username}) gid=1000({self.username}) groups=1000({self.username})\r\n',
             'pwd': '/home/demo\r\n',
@@ -85,6 +85,14 @@ class FakeShell:
         }
         if name in ('exit', 'logout'):
             return name, args, 'closing the lab session.\r\n', True
+        if name == 'cat':
+            # ls lists notes.txt, so cat must know it too or the simulation contradicts itself.
+            target = parts[1][:64] if len(parts) > 1 else ''
+            if not target:
+                return name, args, 'cat: missing file operand (simulated)\r\n', False
+            if target == 'notes.txt':
+                return name, args, 'Lab notes: this host is a simulation; no real files or credentials exist.\r\n', False
+            return name, args, f'{target}: No such file or directory (simulated)\r\n', False
         return name, args, responses.get(name, 'command not found (simulated)\r\n'), False
 
 
