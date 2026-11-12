@@ -157,6 +157,13 @@ class LabTests(unittest.TestCase):
         self.assertIn('<td>sess-r</td>', section)
         self.assertIn('<td>refused (max sessions)</td>', section)
 
+    def test_report_says_when_the_timeline_is_capped(self):
+        record = {'timestamp_utc': '2026-10-20T03:00:00+00:00', 'event': 'connection',
+                  'session_id': 'sess-t', 'client_ip': '127.0.0.1', 'username': '', 'command_name': ''}
+        capped = report.render_report([dict(record) for _ in range(105)], 0)
+        self.assertIn('<h2>Latest events (showing 100 of 105)</h2>', capped)
+        self.assertIn('<h2>Latest events</h2>', report.render_report([dict(record) for _ in range(3)], 0))
+
     def test_report_handles_empty_events(self):
         self.assertIn('No events yet', report.render_report([]))
 
