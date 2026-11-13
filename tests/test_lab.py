@@ -164,6 +164,16 @@ class LabTests(unittest.TestCase):
         self.assertIn('<h2>Latest events (showing 100 of 105)</h2>', capped)
         self.assertIn('<h2>Latest events</h2>', report.render_report([dict(record) for _ in range(3)], 0))
 
+    def test_report_names_the_table_cutoff(self):
+        records = [{'timestamp_utc': '2026-10-20T03:00:00+00:00', 'event': 'password_auth',
+                    'session_id': 'sess-u', 'client_ip': '127.0.0.1', 'username': f'user{n}', 'command_name': ''}
+                   for n in range(25)]
+        output = report.render_report(records, 0)
+        self.assertIn('<h2>Usernames tried (top 20 of 25)</h2>', output)
+        few = report.render_report(records[:5], 0)
+        self.assertIn('<h2>Usernames tried</h2>', few)
+        self.assertNotIn('top 20 of', few)
+
     def test_report_handles_empty_events(self):
         self.assertIn('No events yet', report.render_report([]))
 
