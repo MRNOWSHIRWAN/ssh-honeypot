@@ -126,7 +126,9 @@ def render_report(records, skipped=0, since=None, until=None, session=None):
     esc = lambda value: html.escape(str(value), quote=True)
     def table(counter, heading):
         rows = ''.join(f'<tr><td>{esc(name)}</td><td>{count}</td></tr>' for name, count in counter.most_common(20))
-        return f'<section><h2>{heading}</h2><table><thead><tr><th>Name</th><th>Count</th></tr></thead><tbody>{rows or "<tr><td colspan=2>No events</td></tr>"}</tbody></table></section>'
+        # Name the cutoff so a long tail cannot vanish without a trace.
+        caption = f'{heading} (top 20 of {len(counter)})' if len(counter) > 20 else heading
+        return f'<section><h2>{caption}</h2><table><thead><tr><th>Name</th><th>Count</th></tr></thead><tbody>{rows or "<tr><td colspan=2>No events</td></tr>"}</tbody></table></section>'
     session_rows, session_total = summarize_sessions(records)
     sessions_html = ''.join(
         '<tr>' + ''.join(f'<td>{esc(value)}</td>' for value in (
