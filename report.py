@@ -136,7 +136,8 @@ def render_report(records, skipped=0, since=None, until=None, session=None):
             format_duration(entry['first'], entry['last']), entry['attempts'], entry['commands'],
             ', '.join(entry['usernames'][:3]) + (f' +{len(entry["usernames"]) - 3} more' if len(entry['usernames']) > 3 else ''),
             entry['ended_by'] or '-')) + '</tr>' for entry in session_rows)
-    sessions_heading = f'Sessions ({session_total})' if session_total > len(session_rows) else 'Sessions'
+    sessions_heading = (f'Sessions (showing {len(session_rows)} of {session_total})'
+                        if session_total > len(session_rows) else 'Sessions')
     timeline = ''.join('<tr>' + ''.join(f'<td>{esc(row[key])}</td>' for key in
                         ('timestamp_utc', 'event', 'session_id', 'client_ip', 'username', 'command_name')) + '</tr>'
                        for row in records[-100:][::-1])
