@@ -3,6 +3,8 @@ import json
 import logging
 from pathlib import Path
 import socket
+import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -13,6 +15,8 @@ from datetime import timezone
 import paramiko
 import honeypot
 import report
+
+REPO = Path(__file__).resolve().parent.parent
 
 
 class LabTests(unittest.TestCase):
@@ -183,6 +187,24 @@ class LabTests(unittest.TestCase):
         one = [{'timestamp_utc': '2026-10-20T01:00:00+00:00', 'event': 'connection', 'session_id': 'sess-a',
                 'client_ip': '127.0.0.1', 'username': '', 'command_name': ''}]
         self.assertIn('<h2>Sessions</h2>', report.render_report(one, 0))
+
+    def test_demo_events_match_their_generator(self):
+        # The checked-in demo log must stay byte-identical to make_demo_events.py output.
+        script = REPO / 'samples' / 'make_demo_events.py'
+        result = subprocess.run([sys.executable, str(script)], capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stderr.decode('utf-8', errors='replace'))
+        self.assertEqual(result.stdout, (REPO / 'samples' / 'demo_events.jsonl').read_bytes())
+
+    def test_demo_events_render_a_full_report(self):
+        records, skipped = report.read_events(REPO / 'samples' / 'demo_events.jsonl')
+        self.assertEqual(skipped, 0)
+        output = report.render_report(records, skipped)
+        self.assertIn('<h2>Sessions</h2>', output)                       # four real sessions
+        self.assertIn('idle_timeout', output)                            # one session ended idle
+        self.assertIn('Sessions refused (over cap)', output)
+        self.assertNotIn('[REDACTED]', output)      # the stored placeholder never reaches the report
+        self.assertIn('password_auth', output)      # the demo exercises the redacted-attempt rows
+        self.assertNotIn('<th>Password</th>', output)  # no table ever gets a password column
 
     def test_report_handles_empty_events(self):
         self.assertIn('No events yet', report.render_report([]))
