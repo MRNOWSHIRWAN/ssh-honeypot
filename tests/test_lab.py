@@ -206,6 +206,11 @@ class LabTests(unittest.TestCase):
         self.assertIn('password_auth', output)      # the demo exercises the redacted-attempt rows
         self.assertNotIn('<th>Password</th>', output)  # no table ever gets a password column
 
+    def test_report_table_headers_do_not_wrap(self):
+        # A squeezed column must scroll (div.scroll) instead of splitting a header mid-word.
+        output = report.render_report([], 0)
+        self.assertIn('th{color:#7dd3fc;white-space:nowrap}', output)
+
     def test_report_handles_empty_events(self):
         self.assertIn('No events yet', report.render_report([]))
 
